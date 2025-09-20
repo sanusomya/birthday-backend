@@ -1,0 +1,27 @@
+version: "3.8"
+services:
+  birthday-db:
+    container_name: birthday-db
+    image: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - birthdaydata:/data/db
+  birthday:
+    container_name: birthday
+    build:
+      context: .
+      dockerfile: dockerfile
+    depends_on:
+      - birthday-db
+    environment:
+      - database=birthday
+      - db_coll=birthday
+      - db_url=mongodb://birthday-db:27017
+      - birthday_app_port=8002
+    ports:
+      - "8002:8002"
+
+volumes:
+  birthdaydata:
+    driver: local
