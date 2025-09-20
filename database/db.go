@@ -1,136 +1,194 @@
 package database
 
 import (
-	"birthday/birthday"
-	"birthday/utils"
-	"context"
-	"fmt"
-	"time"
+	"strconv"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	birthday "github.com/sanusomya/birthday-backend/models"
+	// "github.com/sanusomya/birthday-backend/utils"
+	// "context"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 )
 
-func ConnectDB(uri string, database string, collection string) (Icollection, error) {
-	client, err := mongo.NewClient(options.Client().ApplyURI(uri))
-	if err != nil {
-		return &mongo.Collection{}, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+func ConnectDB() *dynamodb.DynamoDB {
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
 
-	defer cancel()
-
-	err = client.Connect(ctx)
-
-	if err != nil {
-		return &mongo.Collection{}, err
-	}
-
-	db := client.Database(database)
-	coll := db.Collection(collection)
-	return coll, nil
+	// Create DynamoDB client
+	return dynamodb.New(sess)
 }
 
-func GetAll(coll Icollection) ([]birthday.Birthday, error) {
+func GetAll(svc *dynamodb.DynamoDB, tableName string) ([]birthday.Birthday, error) {
 	var birth []birthday.Birthday
-	ans, err := coll.Find(context.TODO(), bson.D{{}})
+	ans, err := svc.Scan(&dynamodb.ScanInput{
+		TableName: aws.String(tableName),
+	})
 	if err != nil {
-		fmt.Println("inside db.go get all, error in finding")
 		return []birthday.Birthday{}, err
 	}
-	if ans.RemainingBatchLength() == 0 {
+	if *ans.Count == 0 {
 		return []birthday.Birthday{}, nil
 	}
-	for ans.Next(context.TODO()) {
+	for _, item := range ans.Items {
 		var temp birthday.Birthday
-		ans.Decode(&temp)
+		dynamodbattribute.UnmarshalMap(item, &temp)
 		birth = append(birth, temp)
 	}
-	ans.Close(context.TODO())
 	return birth, nil
 }
 
-func Add(coll Icollection, b birthday.Birthday) error {
-	err := findDuplicate(coll, b.Name, b.Mobile)
+func Add(svc *dynamodb.DynamoDB, tableName string, b birthday.Birthday) error {
+
+	av, err := dynamodbattribute.MarshalMap(b)
 	if err != nil {
 		return err
 	}
-	_, err = coll.InsertOne(context.TODO(), b)
+	input := &dynamodb.PutItemInput{
+		Item:      av,
+		TableName: aws.String(tableName),
+	}
+
+	_, err = svc.PutItem(input)
 	return err
 }
 
-func Delete(coll Icollection, b birthday.Birthday) error {
-	res, err := coll.DeleteOne(context.TODO(), bson.D{{"name", b.Name}, {"month", b.Month}, {"date", b.Date}, {"mobile", b.Mobile}})
-	if res.DeletedCount == 0 {
-		return utils.NotFound{}
+func Delete(svc *dynamodb.DynamoDB, tableName string, b birthday.Birthday) error {
+	input := &dynamodb.DeleteItemInput{
+		Key: map[string]*dynamodb.AttributeValue{
+			"Person": {
+				S: aws.String(b.Person),
+			},
+			"Cell": {
+				N: aws.String(strconv.Itoa(int(b.Cell))),
+			},
+		},
+		TableName: aws.String(tableName),
 	}
+
+	_, err := svc.DeleteItem(input)
 	return err
 }
 
-func Edit(coll Icollection, name string, mobile int64, b birthday.Birthday) error {
-	filter := bson.D{{"name", name}, {"mobile", mobile}}
-	update := bson.D{{"$set", bson.D{{"name", b.Name}, {"date", b.Date}, {"month", b.Month}, {"mobile", b.Mobile}}}}
-
-	res, err := coll.UpdateOne(context.TODO(), filter, update, nil)
-	if res.MatchedCount == 0 {
-		return utils.NotFound{}
+func Edit(svc *dynamodb.DynamoDB, tableName string, name string, mobile int64, b birthday.Birthday) error {
+	input := &dynamodb.UpdateItemInput{
+		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+			":m": {
+				S: aws.String(b.Birthmonth),
+			},
+			":d": {
+				N: aws.String(strconv.Itoa(int(b.Birthdate))),
+			},
+		},
+		TableName: aws.String(tableName),
+		Key: map[string]*dynamodb.AttributeValue{
+			"Person": {
+				S: aws.String(name),
+			},
+			"Cell": {
+				N: aws.String(strconv.Itoa(int(mobile))),
+			},
+		},
+		ReturnValues:     aws.String("UPDATED_NEW"),
+		UpdateExpression: aws.String("set Birthmonth = :m, Birthdate = :d"),
 	}
+
+	_, err := svc.UpdateItem(input)
 	return err
 }
 
-func findDuplicate(coll Icollection, name string, mobile int64) error {
-	ans := coll.FindOne(context.TODO(), bson.D{{"name", name}, {"mobile", mobile}})
-	var temp = birthday.Birthday{}
-	ans.Decode(&temp)
-	if temp.Date != 0 {
-		return utils.AlreadyFind{}
-	}
-	return nil
-}
 
-func FindByNameAndMobile(coll Icollection, phone int64, name string) (birthday.Birthday, error) {
-	var bday birthday.Birthday
-	ans := coll.FindOne(context.TODO(), bson.D{{"mobile", phone}, {"name", name}})
-	ans.Decode(&bday)
-	if bday.Date == 0 {
-		return birthday.Birthday{}, utils.NotFound{}
-	}
-	return bday, nil
-}
+func FindForThisMonth(svc *dynamodb.DynamoDB, tableName string, mon string) ([]birthday.Birthday, error) {
+	var bdays []birthday.Birthday
+	filt := expression.Name("Birthmonth").Equal(expression.Value(mon))
+	proj := expression.NamesList(expression.Name("Person"), expression.Name("Birthdate"), expression.Name("Cell"), expression.Name("Birthmonth"))
 
-func FindForThisMonth(coll Icollection, mon string) ([]birthday.Birthday, error) {
-	var birth []birthday.Birthday
-	ans, err := coll.Find(context.TODO(), bson.D{{"month", mon}})
+	expr, err := expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build()
 	if err != nil {
-		return []birthday.Birthday{}, err
+		return bdays, err
 	}
-	if ans.RemainingBatchLength() == 0 {
-		return []birthday.Birthday{}, nil
+
+	params := &dynamodb.ScanInput{
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		FilterExpression:          expr.Filter(),
+		ProjectionExpression:      expr.Projection(),
+		TableName:                 aws.String(tableName),
 	}
-	for ans.Next(context.TODO()) {
-		var temp birthday.Birthday
-		ans.Decode(&temp)
-		birth = append(birth, temp)
+
+	result, err := svc.Scan(params)
+	if err != nil {
+		return bdays, err
 	}
-	ans.Close(context.TODO())
-	return birth, nil
+	for _, i := range result.Items {
+		bday := birthday.Birthday{}
+
+		err = dynamodbattribute.UnmarshalMap(i, &bday)
+		if err != nil {
+			return bdays, err
+		}
+		bdays = append(bdays, bday)
+	}
+	return bdays, err
 }
 
-func FindForToday(coll Icollection, mon string, date int8) ([]birthday.Birthday, error) {
-	var birth []birthday.Birthday
-	ans, err := coll.Find(context.TODO(), bson.D{{"month", mon}, {"date", date}})
+func FindForToday(svc *dynamodb.DynamoDB, tableName string, mon string, date int8) ([]birthday.Birthday, error) {
+	var bdays []birthday.Birthday
+	filt := expression.And(expression.Name("Birthmonth").Equal(expression.Value(mon)), expression.Name("Birthdate").Equal(expression.Value(date)))
+	proj := expression.NamesList(expression.Name("Person"), expression.Name("Birthdate"), expression.Name("Cell"), expression.Name("Birthmonth"))
+
+	expr, err := expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build()
 	if err != nil {
-		return []birthday.Birthday{}, err
+		return bdays, err
 	}
-	if ans.RemainingBatchLength() == 0 {
-		return []birthday.Birthday{}, nil
+
+	params := &dynamodb.ScanInput{
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		FilterExpression:          expr.Filter(),
+		ProjectionExpression:      expr.Projection(),
+		TableName:                 aws.String(tableName),
 	}
-	for ans.Next(context.TODO()) {
-		var temp birthday.Birthday
-		ans.Decode(&temp)
-		birth = append(birth, temp)
+
+	result, err := svc.Scan(params)
+	if err != nil {
+		return bdays, err
 	}
-	ans.Close(nil)
-	return birth, nil
+	for _, i := range result.Items {
+		bday := birthday.Birthday{}
+
+		err = dynamodbattribute.UnmarshalMap(i, &bday)
+		if err != nil {
+			return bdays, err
+		}
+		bdays = append(bdays, bday)
+	}
+	return bdays, err
+}
+
+func Get(svc *dynamodb.DynamoDB, tableName string, name string, mobile int64) (birthday.Birthday, error) {
+	bday := birthday.Birthday{} 
+	result, err := svc.GetItem(&dynamodb.GetItemInput{
+		TableName: aws.String(tableName),
+		Key: map[string]*dynamodb.AttributeValue{
+			"Person": {
+				S: aws.String(name),
+			},
+			"Cell": {
+				N: aws.String(strconv.Itoa(int(mobile))),
+			},
+		},
+	})
+	if err != nil {
+		return birthday.Birthday{},err
+	}
+	
+	err = dynamodbattribute.UnmarshalMap(result.Item, &bday)
+	if err != nil {
+		return birthday.Birthday{},err
+	}
+	return bday,err
 }

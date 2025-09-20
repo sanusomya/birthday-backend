@@ -1,20 +1,21 @@
-package server
+package bithday_handler
 
 import (
-	"birthday/birthday"
-	"birthday/utils"
 	"bytes"
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
 
+	birthday "github.com/sanusomya/birthday-backend/models"
+	"github.com/sanusomya/birthday-backend/utils"
+
 	"github.com/labstack/echo/v4"
 )
 
 func checkParams(bday birthday.Birthday) bool {
-	validDate := utils.CheckDates(bday.Date, bday.Month)
-	validName := utils.ValidName(bday.Name)
-	validMobile := utils.ValidMobile(bday.Mobile)
+	validDate := utils.CheckDates(int8(bday.Birthdate), bday.Birthmonth)
+	validName := utils.ValidName(bday.Person)
+	validMobile := utils.ValidMobile(int64(bday.Cell))
 	return validDate && validMobile && validName
 }
 
@@ -33,6 +34,7 @@ func validationMiddleware(m echo.HandlerFunc) echo.HandlerFunc {
 		}
 		isValid := checkParams(bday)
 		if !isValid {
+
 			c.JSON(http.StatusBadRequest, map[string]string{
 				"name":   "should only contains alphabets with length less than 10",
 				"mobile": "should contain only numbers with length 10",

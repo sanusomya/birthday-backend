@@ -1,10 +1,8 @@
 package main
 
 
-// adding comment to test ruleset
-
 import (
-	"birthday/server"
+	"github.com/sanusomya/birthday-backend/server"
 )
 
 func main() {

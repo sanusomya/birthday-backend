@@ -1,38 +1,27 @@
-package server
+package bithday_handler
 
 import (
-	"birthday/birthday"
-	"birthday/database"
-	"fmt"
+	"strconv"
+
+	birthday "github.com/sanusomya/birthday-backend/models"
+
 	"net/http"
 	"os"
-	"strconv"
+
+	"github.com/sanusomya/birthday-backend/database"
+
+	// "strconv"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 )
 
-func registerEndpoints(e *echo.Echo) {
-	editGroup := e.Group("/edit")
-	editGroup.PUT("/", updateBirthday, validationMiddleware)
-	editGroup.PUT("/name", updateBirthdayName, nameValidationMiddleware)
-	editGroup.PUT("/number", updateBirthdayNumber, mobileValidationMiddleware)
-	editGroup.PUT("/date", updateBirthdayDate, dateValidationMiddleware)
-	e.GET("/", getAllBirthdays)
-	e.GET("/today", getAllBirthdaysForToday)
-	e.GET("/month", getAllBirthdaysForThisMonth)
-	e.DELETE("/", deleteBirthday, validationMiddleware)
-	e.POST("/", addBirthday, validationMiddleware)
-}
-
 var _ = godotenv.Load()
-var uri = os.Getenv("db_url")
-var db = os.Getenv("database")
-var collection = os.Getenv("db_coll")
-var coll, _ = database.ConnectDB(uri, db, collection)
+var table = os.Getenv("table")
+var coll = database.ConnectDB()
 
 func getAllBirthdays(c echo.Context) error {
-	birthdays, err := database.GetAll(coll)
+	birthdays, err := database.GetAll(coll, table)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, err.Error())
 		return err
@@ -40,7 +29,7 @@ func getAllBirthdays(c echo.Context) error {
 	return c.JSON(http.StatusOK, birthdays)
 }
 
-func addBirthday(c echo.Context) error {
+func addBirthday(c echo.Context) error { 
 	var body birthday.Birthday
 	err := c.Bind(&body)
 	if err != nil {
@@ -49,7 +38,7 @@ func addBirthday(c echo.Context) error {
 	}
 	var temp = birthday.Birthday{}
 	temp = body
-	err = database.Add(coll, temp)
+	err = database.Add(coll, table, temp)
 	if err != nil {
 		c.JSON(http.StatusFound, err.Error())
 		return err
@@ -66,7 +55,7 @@ func deleteBirthday(c echo.Context) error {
 	}
 	var temp = birthday.Birthday{}
 	temp = body
-	err = database.Delete(coll, temp)
+	err = database.Delete(coll, table, temp)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
@@ -90,7 +79,7 @@ func updateBirthday(c echo.Context) error {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
-	err = database.Edit(coll, params["name"][0], int64(mobile), temp)
+	err = database.Edit(coll, table, params["name"][0], int64(mobile), temp)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
@@ -107,23 +96,29 @@ func updateBirthdayName(c echo.Context) error {
 		return err
 	}
 	params := c.QueryParams()
-	var temp = birthday.Birthday{}
 	mobile, err := strconv.Atoi(params["mobile"][0])
 	name := params["name"][0]
 	if err != nil {
-		c.JSON(http.StatusBadRequest, "here")
+		c.JSON(http.StatusBadRequest, "cannot convert to integer")
 		return err
 	}
-	bday, err := database.FindByNameAndMobile(coll, int64(mobile), name)
+	bday, err := database.Get(coll, table, name, int64(mobile))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
-	temp.Name = body
-	temp.Date = bday.Date
-	temp.Month = bday.Month
-	temp.Mobile = int64(mobile)
-	err = database.Edit(coll, name, int64(mobile), temp)
+	err = database.Delete(coll, table, bday)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, err.Error())
+		return err
+	}
+	temp := birthday.Birthday{
+		Person:     body,
+		Cell:       bday.Cell,
+		Birthdate:  bday.Birthdate,
+		Birthmonth: bday.Birthmonth,
+	}
+	err = database.Add(coll, table, temp)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
@@ -140,56 +135,30 @@ func updateBirthdayNumber(c echo.Context) error {
 		return err
 	}
 	params := c.QueryParams()
-	var temp = birthday.Birthday{}
 	mobile, err := strconv.Atoi(params["mobile"][0])
 	name := params["name"][0]
 	if err != nil {
-		c.JSON(http.StatusBadRequest, "here")
+		c.JSON(http.StatusBadRequest, "cannot convert to integer")
 		return err
 	}
-	bday, err := database.FindByNameAndMobile(coll, int64(mobile), name)
+	bday, err := database.Get(coll, table, name, int64(mobile))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
-	temp.Name = name
-	temp.Date = bday.Date
-	temp.Month = bday.Month
-	temp.Mobile = body
-	err = database.Edit(coll, name, int64(mobile), temp)
+	err = database.Delete(coll, table, bday)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
-	return c.JSON(http.StatusPartialContent, temp)
-}
-
-func updateBirthdayDate(c echo.Context) error {
-	var body struct {
-		Date  int
-		Month string
+	temp := birthday.Birthday{
+		Person:     bday.Person,
+		Cell:       body,
+		Birthdate:  bday.Birthdate,
+		Birthmonth: bday.Birthmonth,
 	}
-	err := c.Bind(&body)
-
+	err = database.Add(coll, table, temp)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, "unable to bind body")
-		return err
-	}
-	params := c.QueryParams()
-	var temp = birthday.Birthday{}
-	mobile, err := strconv.Atoi(params["mobile"][0])
-	name := params["name"][0]
-	if err != nil {
-		c.JSON(http.StatusBadRequest, err.Error())
-		return err
-	}
-	temp.Name = name
-	temp.Date = int8(body.Date)
-	temp.Month = body.Month
-	temp.Mobile = int64(mobile)
-	err = database.Edit(coll, name, int64(mobile), temp)
-	if err != nil {
-		fmt.Println("here")
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
@@ -203,7 +172,7 @@ func getAllBirthdaysForToday(c echo.Context) error {
 		c.JSON(http.StatusBadRequest, err.Error())
 		return err
 	}
-	birthdays, err := database.FindForToday(coll, params["month"][0], int8(date))
+	birthdays, err := database.FindForToday(coll, table, params["month"][0], int8(date))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, err.Error())
 		return err
@@ -213,7 +182,7 @@ func getAllBirthdaysForToday(c echo.Context) error {
 
 func getAllBirthdaysForThisMonth(c echo.Context) error {
 	params := c.QueryParams()
-	birthdays, err := database.FindForThisMonth(coll, params["month"][0])
+	birthdays, err := database.FindForThisMonth(coll, table, params["month"][0])
 	if err != nil {
 		c.JSON(http.StatusBadGateway, err.Error())
 		return err

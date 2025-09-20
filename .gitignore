@@ -1,4 +1,8 @@
-.vscode/
-.env
-*test*
-*main
+*
+vendor
+!*.go
+!*.mod
+!*.sum
+!.gitignore
+!*.md
+!*/
